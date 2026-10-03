@@ -29,15 +29,18 @@ RUN addgroup -S app -g 1001 \
 COPY --from=build --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist
 COPY --from=build --chown=app:app /app/package.json ./package.json
+COPY --chown=app:app docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
 
 USER app
 
 EXPOSE 5002 8082
 
 # /health pings MongoDB via the Mongoose connection. busybox wget ships with
-# alpine, so no extra package is needed.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+# alpine, so no extra package is needed. start-period covers the index sync.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -q -O /dev/null "http://127.0.0.1:${HTTP_PORT:-8082}/health" || exit 1
 
-# exec form so Node is PID 1 and receives SIGTERM directly for graceful shutdown.
-CMD ["node", "dist/main.js"]
+# PRD-3: entrypoint syncs MongoDB indexes (`syncIndexes()`) then execs the app
+# so Node is PID 1 and receives SIGTERM directly for graceful shutdown.
+ENTRYPOINT ["./docker-entrypoint.sh"]

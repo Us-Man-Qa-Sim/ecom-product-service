@@ -23,19 +23,20 @@ export const ProductStockSchema = SchemaFactory.createForClass(ProductStock);
 /**
  * Product catalog entry (SCHEMAS.md §3). Money is integer minor units
  * (`priceMinor`, cents) plus an ISO-4217 `currency` — never a float. The
- * text index on name/description and the `syncIndexes()` wiring land in PRD-3;
- * the single-field `category` / `isActive` filter indexes are declared inline
- * here because they are intrinsic to how the list endpoint queries.
+ * single-field `category` / `isActive` filter indexes are declared inline here
+ * because they are intrinsic to how the list endpoint queries; the compound
+ * text index over name + description is declared on the schema below (Mongo
+ * allows only one text index per collection, so both fields go together).
  */
 @Schema({ timestamps: true, collection: 'products' })
 export class Product {
   // _id: ObjectId (auto)
 
   @Prop({ required: true })
-  name!: string; // text index (PRD-3)
+  name!: string; // part of the name/description text index (see below)
 
   @Prop({ default: '' })
-  description!: string; // text index (PRD-3)
+  description!: string; // part of the name/description text index (see below)
 
   @Prop({ required: true, index: true })
   category!: string;
@@ -62,3 +63,8 @@ export class Product {
 }
 
 export const ProductSchema = SchemaFactory.createForClass(Product);
+
+// Full-text search over name + description, backing the search/list endpoint
+// (PRD-4). With `autoIndex` off in production, `syncIndexes()` (PRD-3,
+// src/scripts/sync-indexes.ts) is what actually materialises this index.
+ProductSchema.index({ name: 'text', description: 'text' });

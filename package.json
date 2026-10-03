@@ -12,6 +12,8 @@
     "start": "node dist/main.js",
     "start:dev": "ts-node --transpile-only -r source-map-support/register src/main.ts",
     "start:debug": "node --inspect=0.0.0.0:9229 -r ts-node/register/transpile-only src/main.ts",
+    "sync-indexes": "node dist/scripts/sync-indexes.js",
+    "sync-indexes:dev": "ts-node --transpile-only src/scripts/sync-indexes.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

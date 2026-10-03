@@ -75,6 +75,11 @@ describe('Product schema', () => {
     expect(keys).toContainEqual({ isActive: 1 });
   });
 
+  it('declares a text index over name and description', () => {
+    const keys = indexesOf(ProductModel).map((i) => i.keys);
+    expect(keys).toContainEqual({ name: 'text', description: 'text' });
+  });
+
   it('enables timestamps', () => {
     expect(ProductModel.schema.get('timestamps')).toBe(true);
   });
@@ -163,5 +168,10 @@ describe('Outbox schema', () => {
     expect(errors?.errors.aggregateId).toBeDefined();
     expect(errors?.errors.eventType).toBeDefined();
     expect(errors?.errors.payload).toBeDefined();
+  });
+
+  it('declares a sentAt index for the relay poll', () => {
+    const keys = indexesOf(OutboxModel).map((i) => i.keys);
+    expect(keys).toContainEqual({ sentAt: 1 });
   });
 });

@@ -33,3 +33,9 @@ export class Outbox {
 }
 
 export const OutboxSchema = SchemaFactory.createForClass(Outbox);
+
+// Relay poll index (SCHEMAS.md §3). The Mongo relay (KFK-3) claims unsent rows
+// with `findOneAndUpdate({ sentAt: null }, …)`; indexing `sentAt` keeps that
+// scan cheap once most rows are sent. Built explicitly via `syncIndexes()`
+// (PRD-3) because `autoIndex` is off in production.
+OutboxSchema.index({ sentAt: 1 });
