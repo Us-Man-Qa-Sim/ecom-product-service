@@ -1,6 +1,10 @@
 # product-service
 
-Product catalog and stock management microservice for the ecom platform. Exposes a gRPC API. Stores data in MongoDB via Mongoose.
+Product catalog and stock management microservice for the ecom platform. Exposes a gRPC API (`ecom.product.v1.ProductService`) and an HTTP `/health` endpoint. Stores data in MongoDB via Mongoose.
+
+## Status
+
+Scaffolded (`PRD-1`): NestJS 12 hybrid app — gRPC transport on `:5002` for the `ecom.product.v1` package, HTTP `/health` on `:8082` (Mongoose ping via `@nestjs/terminus`), pino logging, `@nestjs/config` with a `zod` env schema, and a `ProductController` stub where every RPC answers gRPC `UNIMPLEMENTED`. Real logic lands in `PRD-2` → `PRD-7`.
 
 ## Responsibilities
 
@@ -14,9 +18,43 @@ Product catalog and stock management microservice for the ecom platform. Exposes
 
 ```bash
 npm install
+cp .env.example .env   # adjust MONGO_URI for your local Mongo replica set
 npm run start:dev
 ```
 
+Requires a MongoDB replica set (`rs0`) — see `../infra/docker-compose.yml`. The gRPC
+service and health endpoint come up together; `/health` reports `down` until Mongo
+is reachable.
+
+## Scripts
+
+| Script                            | Purpose                            |
+| --------------------------------- | ---------------------------------- |
+| `npm run build`                   | Compile TypeScript to `dist/`      |
+| `npm start`                       | Run the built app (`dist/main.js`) |
+| `npm run start:dev`               | Run from source with ts-node       |
+| `npm run lint` / `lint:fix`       | ESLint                             |
+| `npm run format` / `format:check` | Prettier                           |
+| `npm test`                        | Jest                               |
+
 ## Environment
 
-See `.env.example` for required configuration.
+| Var               | Default           | Notes                                           |
+| ----------------- | ----------------- | ----------------------------------------------- |
+| `NODE_ENV`        | `development`     | `development` \| `test` \| `production`         |
+| `LOG_LEVEL`       | `info`            | pino level                                      |
+| `GRPC_HOST`       | `0.0.0.0`         | gRPC bind host                                  |
+| `GRPC_PORT`       | `5002`            | gRPC bind port                                  |
+| `HTTP_HOST`       | `0.0.0.0`         | health bind host                                |
+| `HTTP_PORT`       | `8082`            | health bind port                                |
+| `MONGO_URI`       | —                 | **required**; must target the `rs0` replica set |
+| `KAFKA_BROKERS`   | `localhost:9092`  | used once the Kafka phase (KFK) lands           |
+| `KAFKA_CLIENT_ID` | `product-service` | Kafka client id                                 |
+
+See `.env.example` for the full annotated list.
+
+## Endpoints
+
+- gRPC: `ecom.product.v1.ProductService` on `GRPC_PORT` (all RPCs currently `UNIMPLEMENTED`)
+- `GET /health` — liveness + MongoDB readiness (Terminus)
+- `GET /health/live` — process liveness only
