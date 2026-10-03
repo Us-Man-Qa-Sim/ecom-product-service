@@ -4,7 +4,9 @@ Product catalog and stock management microservice for the ecom platform. Exposes
 
 ## Status
 
-Scaffolded (`PRD-1`): NestJS 12 hybrid app — gRPC transport on `:5002` for the `ecom.product.v1` package, HTTP `/health` on `:8082` (Mongoose ping via `@nestjs/terminus`), pino logging, `@nestjs/config` with a `zod` env schema, and a `ProductController` stub where every RPC answers gRPC `UNIMPLEMENTED`. Real logic lands in `PRD-2` → `PRD-7`.
+Scaffolded (`PRD-1`): NestJS 12 hybrid app — gRPC transport on `:5002` for the `ecom.product.v1` package, HTTP `/health` on `:8082` (Mongoose ping via `@nestjs/terminus`), pino logging, `@nestjs/config` with a `zod` env schema, and a `ProductController` stub where every RPC answers gRPC `UNIMPLEMENTED`.
+
+Schemas (`PRD-2`): the four Mongoose models live in `src/schemas/` — `Product` (catalog entry with embedded `stock.{available,reserved}`, `min: 0`-guarded money and stock, `Map` attributes, image URLs), `StockReservation` (per-order hold with embedded items and `ACTIVE`/`RELEASED`/`CONSUMED` status), `ProcessedEvent` (inbox, unique `eventId`) and `Outbox` (transactional outbox). All are registered and re-exported by `ProductModule`. The text index and `syncIndexes()` wiring are `PRD-3`; real RPC logic lands in `PRD-4` → `PRD-7`.
 
 ## Responsibilities
 
