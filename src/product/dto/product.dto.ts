@@ -106,3 +106,18 @@ export const GetProductsByIdsInputSchema = z.object({
   productIds: z.array(ObjectIdSchema).min(1).max(100),
 });
 export type GetProductsByIdsInput = z.infer<typeof GetProductsByIdsInputSchema>;
+
+// AdjustStock applies a signed delta to `stock.available` (positive = restock,
+// negative = reduce). Bounded to int32 at the proto edge; zero is rejected as a
+// no-op programming error — a caller that wants to set an absolute value
+// should go through UpdateProduct instead.
+export const AdjustStockInputSchema = z.object({
+  productId: ObjectIdSchema,
+  delta: z
+    .number()
+    .int()
+    .min(-2_147_483_647)
+    .max(2_147_483_647)
+    .refine((v) => v !== 0, { message: 'must not be zero' }),
+});
+export type AdjustStockInput = z.infer<typeof AdjustStockInputSchema>;

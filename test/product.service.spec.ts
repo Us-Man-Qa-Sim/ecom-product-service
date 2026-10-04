@@ -2,7 +2,11 @@ import { Mongoose, Types } from 'mongoose';
 import type { Model } from 'mongoose';
 import { Product, ProductSchema, type ProductDocument } from '../src/schemas/product.schema';
 import { ProductService } from '../src/product/product.service';
-import { NotFoundError, ValidationError } from '../src/common/errors/domain-errors';
+import {
+  FailedPreconditionError,
+  NotFoundError,
+  ValidationError,
+} from '../src/common/errors/domain-errors';
 
 // A single isolated Mongoose instance is enough to build Product documents
 // locally. The service only needs the Model surface we mock below (no live
@@ -63,6 +67,12 @@ function matchesFilter(row: StoreRow, filter: UnknownFilter): boolean {
       const range = value as { $gte?: number; $lte?: number };
       if (range.$gte !== undefined && row.priceMinor < range.$gte) return false;
       if (range.$lte !== undefined && row.priceMinor > range.$lte) return false;
+      continue;
+    }
+    if (key === 'stock.available' && typeof value === 'object' && value !== null) {
+      const range = value as { $gte?: number; $lte?: number };
+      if (range.$gte !== undefined && row.stock.available < range.$gte) return false;
+      if (range.$lte !== undefined && row.stock.available > range.$lte) return false;
       continue;
     }
     const rowValue = (row as unknown as Record<string, unknown>)[key];
@@ -170,6 +180,28 @@ function makeModelStub(initial: StoreRow[] = []): {
         return hydrate(removed);
       },
     })),
+    findOneAndUpdate: jest.fn(
+      (filter: UnknownFilter, update: { $inc?: Record<string, number> }) => ({
+        exec: async () => {
+          const row = store.find((r) => matchesFilter(r, filter));
+          if (!row) return null;
+          if (update.$inc) {
+            for (const [key, delta] of Object.entries(update.$inc)) {
+              if (key === 'stock.available') {
+                row.stock.available += delta;
+              } else if (key === 'stock.reserved') {
+                row.stock.reserved += delta;
+              } else {
+                const r = row as unknown as Record<string, number>;
+                r[key] = (r[key] ?? 0) + delta;
+              }
+            }
+          }
+          row.updatedAt = new Date();
+          return hydrate(row);
+        },
+      }),
+    ),
   };
 
   // The service calls `new this.productModel(data)` + `.save()`. Model is used
@@ -537,5 +569,96 @@ describe('ProductService.getByIds', () => {
     const stub = makeModelStub();
     const svc = new ProductService(stub.model);
     await expect(svc.getByIds({ productIds: ['nope'] })).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+describe('ProductService.adjustStock', () => {
+  it('increments available for a positive delta without touching reserved', async () => {
+    const r = row({ stock: { available: 5, reserved: 3 } });
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    const doc = await svc.adjustStock({ productId: r._id.toString(), delta: 7 });
+    expect(doc.stock.available).toBe(12);
+    expect(doc.stock.reserved).toBe(3);
+    expect(stub.store[0].stock.available).toBe(12);
+    expect(stub.store[0].stock.reserved).toBe(3);
+  });
+
+  it('decrements available for a negative delta when stock is sufficient', async () => {
+    const r = row({ stock: { available: 10, reserved: 2 } });
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    const doc = await svc.adjustStock({ productId: r._id.toString(), delta: -4 });
+    expect(doc.stock.available).toBe(6);
+    expect(doc.stock.reserved).toBe(2);
+  });
+
+  it('guards negative deltas with stock.available >= -delta', async () => {
+    const r = row({ stock: { available: 2, reserved: 0 } });
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    await expect(
+      svc.adjustStock({ productId: r._id.toString(), delta: -5 }),
+    ).rejects.toBeInstanceOf(FailedPreconditionError);
+    // Store must be untouched when the guard fails.
+    expect(stub.store[0].stock.available).toBe(2);
+    // The guarded filter must have been sent to the DB.
+    const call = stub.model.findOneAndUpdate as unknown as jest.Mock;
+    const [filter] = call.mock.calls[call.mock.calls.length - 1];
+    expect(filter['stock.available']).toEqual({ $gte: 5 });
+  });
+
+  it('does not use a stock guard for positive deltas', async () => {
+    const r = row({ stock: { available: 1, reserved: 0 } });
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    await svc.adjustStock({ productId: r._id.toString(), delta: 100 });
+    const call = stub.model.findOneAndUpdate as unknown as jest.Mock;
+    const [filter] = call.mock.calls[call.mock.calls.length - 1];
+    expect(filter['stock.available']).toBeUndefined();
+  });
+
+  it('throws NotFoundError for an unknown product id', async () => {
+    const stub = makeModelStub();
+    const svc = new ProductService(stub.model);
+    await expect(
+      svc.adjustStock({ productId: new Types.ObjectId().toString(), delta: 1 }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('rejects a zero delta with ValidationError', async () => {
+    const r = row();
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    await expect(svc.adjustStock({ productId: r._id.toString(), delta: 0 })).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+    expect(stub.model.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-integer delta with ValidationError', async () => {
+    const r = row();
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    await expect(
+      svc.adjustStock({ productId: r._id.toString(), delta: 1.5 }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('rejects a delta outside int32 bounds', async () => {
+    const r = row();
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    await expect(
+      svc.adjustStock({ productId: r._id.toString(), delta: 2_147_483_648 }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('rejects a malformed id with ValidationError', async () => {
+    const stub = makeModelStub();
+    const svc = new ProductService(stub.model);
+    await expect(svc.adjustStock({ productId: 'nope', delta: 1 })).rejects.toBeInstanceOf(
+      ValidationError,
+    );
   });
 });

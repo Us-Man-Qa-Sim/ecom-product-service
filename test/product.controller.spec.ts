@@ -1,5 +1,4 @@
-import { Metadata, status as GrpcStatus } from '@grpc/grpc-js';
-import { RpcException } from '@nestjs/microservices';
+import { Metadata } from '@grpc/grpc-js';
 import { Mongoose, Types } from 'mongoose';
 import { Product, ProductSchema, type ProductDocument } from '../src/schemas/product.schema';
 import { ProductController } from '../src/product/product.controller';
@@ -45,6 +44,7 @@ function makeService(): jest.Mocked<ProductService> {
     get: jest.fn(),
     list: jest.fn(),
     getByIds: jest.fn(),
+    adjustStock: jest.fn(),
   } as unknown as jest.Mocked<ProductService>;
 }
 
@@ -66,6 +66,7 @@ describe('ProductController — admin-only writes', () => {
     ['createProduct', 'create'],
     ['updateProduct', 'update'],
     ['deleteProduct', 'remove'],
+    ['adjustStock', 'adjustStock'],
   ] as const)('%s rejects a CUSTOMER with PermissionDeniedError', async (rpc, serviceMethod) => {
     const svc = makeService();
     const ctl = new ProductController(svc);
@@ -78,7 +79,7 @@ describe('ProductController — admin-only writes', () => {
     expect(svc[serviceMethod]).not.toHaveBeenCalled();
   });
 
-  it.each([['createProduct'], ['updateProduct'], ['deleteProduct']])(
+  it.each([['createProduct'], ['updateProduct'], ['deleteProduct'], ['adjustStock']])(
     '%s rejects a missing identity with UnauthenticatedError',
     async (rpc) => {
       const svc = makeService();
@@ -152,17 +153,27 @@ describe('ProductController — public reads', () => {
   });
 });
 
-describe('ProductController — adjustStock (deferred to PRD-5)', () => {
-  it('throws UNIMPLEMENTED', async () => {
+describe('ProductController — adjustStock', () => {
+  it('allows ADMIN, delegates to the service and returns the mapped product', async () => {
     const svc = makeService();
+    const doc = buildDoc({ stock: { available: 12, reserved: 0 } });
+    svc.adjustStock.mockResolvedValue(doc);
     const ctl = new ProductController(svc);
-    try {
-      await ctl.adjustStock({ productId: new Types.ObjectId().toString(), delta: 1 } as never);
-      throw new Error('expected throw');
-    } catch (err) {
-      expect(err).toBeInstanceOf(RpcException);
-      const payload = (err as RpcException).getError() as { code: number };
-      expect(payload.code).toBe(GrpcStatus.UNIMPLEMENTED);
-    }
+    const resp = await ctl.adjustStock({ productId: doc._id.toString(), delta: 7 } as never, ADMIN);
+    expect(svc.adjustStock).toHaveBeenCalledWith({
+      productId: doc._id.toString(),
+      delta: 7,
+    });
+    expect(resp.product?.id).toBe(doc._id.toString());
+    expect(resp.product?.stock?.available).toBe(12);
+  });
+
+  it('propagates service errors without catching them', async () => {
+    const svc = makeService();
+    svc.adjustStock.mockRejectedValue(new Error('boom'));
+    const ctl = new ProductController(svc);
+    await expect(
+      ctl.adjustStock({ productId: new Types.ObjectId().toString(), delta: -3 } as never, ADMIN),
+    ).rejects.toThrow('boom');
   });
 });

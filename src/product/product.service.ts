@@ -2,9 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model, QueryFilter, SortOrder } from 'mongoose';
 import type { ZodType } from 'zod';
-import { NotFoundError, ValidationError } from '../common/errors/domain-errors';
+import {
+  FailedPreconditionError,
+  NotFoundError,
+  ValidationError,
+} from '../common/errors/domain-errors';
 import { Product, ProductDocument } from '../schemas/product.schema';
 import {
+  AdjustStockInputSchema,
   CreateProductInputSchema,
   GetProductsByIdsInputSchema,
   ListProductsInput,
@@ -103,6 +108,41 @@ export class ProductService {
     // id on its side (order-service does exactly that when snapshotting).
     const uniqueIds = Array.from(new Set(input.productIds));
     return this.productModel.find({ _id: { $in: uniqueIds } }).exec();
+  }
+
+  async adjustStock(raw: unknown): Promise<ProductDocument> {
+    const input = parse(AdjustStockInputSchema, raw, 'AdjustStock');
+
+    // Single conditional atomic update, same pattern as reservation (§2):
+    // positive delta — unconditional $inc. Negative delta — guard by
+    // `stock.available >= -delta` so the counter cannot go below zero even
+    // under concurrent writes. `stock.reserved` is deliberately untouched;
+    // restocking adds free units, reservations are a separate lifecycle.
+    const filter: QueryFilter<ProductDocument> =
+      input.delta < 0
+        ? { _id: input.productId, 'stock.available': { $gte: -input.delta } }
+        : { _id: input.productId };
+
+    const doc = await this.productModel
+      .findOneAndUpdate(
+        filter,
+        { $inc: { 'stock.available': input.delta } },
+        { new: true, runValidators: true },
+      )
+      .exec();
+
+    if (doc) return doc;
+
+    // No match: either the product does not exist, or the stock guard failed.
+    // Disambiguate with a cheap follow-up read so the caller sees NOT_FOUND vs
+    // FAILED_PRECONDITION instead of a single ambiguous error.
+    const exists = await this.productModel.findById(input.productId).exec();
+    if (!exists) {
+      throw new NotFoundError('Product not found');
+    }
+    throw new FailedPreconditionError(
+      `Insufficient available stock to adjust by ${input.delta} (available=${exists.stock.available})`,
+    );
   }
 
   private validateListRanges(input: ListProductsInput): void {

@@ -1,6 +1,4 @@
 import { Controller, UseFilters } from '@nestjs/common';
-import { RpcException } from '@nestjs/microservices';
-import { status } from '@grpc/grpc-js';
 import type { Metadata } from '@grpc/grpc-js';
 import {
   AdjustStockRequest,
@@ -25,20 +23,11 @@ import { readIdentity, requireAdmin } from '../identity/identity.util';
 import { ProductService } from './product.service';
 import { toProtoProduct } from './product.mapper';
 
-// PRD-4: public reads (Get, List, GetProductsByIds — the last used by
+// PRD-4/PRD-5: public reads (Get, List, GetProductsByIds — the last used by
 // order-service when snapshotting items at order-creation time), admin-only
-// writes (Create, Update, Delete). Admin enforcement is the gateway's primary
-// job (JWT verified there), but we re-check here from the forwarded identity
-// metadata so a leaked internal path still cannot write.
-//
-// AdjustStock is wired to `unimplemented` on purpose — it lands in PRD-5.
-
-function unimplemented(rpc: string): never {
-  throw new RpcException({
-    code: status.UNIMPLEMENTED,
-    message: `${rpc} is not implemented yet`,
-  });
-}
+// writes (Create, Update, Delete, AdjustStock). Admin enforcement is the
+// gateway's primary job (JWT verified there), but we re-check here from the
+// forwarded identity metadata so a leaked internal path still cannot write.
 
 @Controller()
 @UseFilters(GrpcExceptionFilter)
@@ -96,7 +85,12 @@ export class ProductController implements ProductServiceController {
     return { products: products.map(toProtoProduct) };
   }
 
-  adjustStock(_request: AdjustStockRequest): Promise<AdjustStockResponse> {
-    return unimplemented('AdjustStock');
+  async adjustStock(
+    request: AdjustStockRequest,
+    metadata?: Metadata,
+  ): Promise<AdjustStockResponse> {
+    requireAdmin(readIdentity(metadata));
+    const product = await this.productService.adjustStock(request);
+    return { product: toProtoProduct(product) };
   }
 }
