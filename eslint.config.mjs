@@ -15,4 +15,13 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  // The scripts/ folder holds CommonJS launchers (e.g. seed-products.js) that
+  // must call `require()` before ts-node is registered — no ESM import can
+  // precede that bootstrap without also being transpiled.
+  {
+    files: ['scripts/**/*.js'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
 );

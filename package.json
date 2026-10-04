@@ -14,6 +14,7 @@
     "start:debug": "node --inspect=0.0.0.0:9229 -r ts-node/register/transpile-only src/main.ts",
     "sync-indexes": "node dist/scripts/sync-indexes.js",
     "sync-indexes:dev": "ts-node --transpile-only src/scripts/sync-indexes.ts",
+    "seed:products": "node scripts/seed-products.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
