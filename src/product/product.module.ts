@@ -5,6 +5,7 @@ import { ProcessedEvent, ProcessedEventSchema } from '../schemas/processed-event
 import { Product, ProductSchema } from '../schemas/product.schema';
 import { StockReservation, StockReservationSchema } from '../schemas/stock-reservation.schema';
 import { ProductController } from './product.controller';
+import { ProductService } from './product.service';
 
 // Model registration for the product database. Product is used by the sync CRUD
 // endpoints (PRD-4/PRD-5); Outbox, ProcessedEvent and StockReservation back the
@@ -21,6 +22,7 @@ const MODELS = MongooseModule.forFeature([
 @Module({
   imports: [MODELS],
   controllers: [ProductController],
-  exports: [MODELS],
+  providers: [ProductService],
+  exports: [MODELS, ProductService],
 })
 export class ProductModule {}

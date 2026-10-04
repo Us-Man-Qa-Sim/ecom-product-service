@@ -34,7 +34,9 @@ async function main(): Promise<void> {
   // autoIndex is irrelevant here — syncIndexes() builds indexes explicitly
   // regardless — but we disable it so creating the models never kicks off a
   // second, implicit build in parallel.
-  const connection = await mongoose.createConnection(env.MONGO_URI, { autoIndex: false }).asPromise();
+  const connection = await mongoose
+    .createConnection(env.MONGO_URI, { autoIndex: false })
+    .asPromise();
 
   try {
     for (const { name, schema } of MODELS) {

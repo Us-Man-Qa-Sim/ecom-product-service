@@ -1,6 +1,7 @@
-import { Controller } from '@nestjs/common';
+import { Controller, UseFilters } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { status } from '@grpc/grpc-js';
+import type { Metadata } from '@grpc/grpc-js';
 import {
   AdjustStockRequest,
   AdjustStockResponse,
@@ -19,11 +20,19 @@ import {
   UpdateProductRequest,
   UpdateProductResponse,
 } from '@us-man-qa-sim/ecom-contracts/generated/product';
+import { GrpcExceptionFilter } from '../common/errors/grpc-exception.filter';
+import { readIdentity, requireAdmin } from '../identity/identity.util';
+import { ProductService } from './product.service';
+import { toProtoProduct } from './product.mapper';
 
-// PRD-1 scaffold: every RPC is wired to the gRPC transport but not yet
-// implemented. Real logic lands in PRD-4 (CRUD / List / GetProductsByIds) and
-// PRD-5 (AdjustStock). Until then each method answers UNIMPLEMENTED so callers
-// get a clean gRPC status rather than a transport error.
+// PRD-4: public reads (Get, List, GetProductsByIds — the last used by
+// order-service when snapshotting items at order-creation time), admin-only
+// writes (Create, Update, Delete). Admin enforcement is the gateway's primary
+// job (JWT verified there), but we re-check here from the forwarded identity
+// metadata so a leaked internal path still cannot write.
+//
+// AdjustStock is wired to `unimplemented` on purpose — it lands in PRD-5.
+
 function unimplemented(rpc: string): never {
   throw new RpcException({
     code: status.UNIMPLEMENTED,
@@ -32,30 +41,59 @@ function unimplemented(rpc: string): never {
 }
 
 @Controller()
+@UseFilters(GrpcExceptionFilter)
 @ProductServiceControllerMethods()
 export class ProductController implements ProductServiceController {
-  createProduct(_request: CreateProductRequest): Promise<CreateProductResponse> {
-    return unimplemented('CreateProduct');
+  constructor(private readonly productService: ProductService) {}
+
+  async createProduct(
+    request: CreateProductRequest,
+    metadata?: Metadata,
+  ): Promise<CreateProductResponse> {
+    requireAdmin(readIdentity(metadata));
+    const product = await this.productService.create(request);
+    return { product: toProtoProduct(product) };
   }
 
-  updateProduct(_request: UpdateProductRequest): Promise<UpdateProductResponse> {
-    return unimplemented('UpdateProduct');
+  async updateProduct(
+    request: UpdateProductRequest,
+    metadata?: Metadata,
+  ): Promise<UpdateProductResponse> {
+    requireAdmin(readIdentity(metadata));
+    const product = await this.productService.update(request);
+    return { product: toProtoProduct(product) };
   }
 
-  deleteProduct(_request: DeleteProductRequest): Promise<DeleteProductResponse> {
-    return unimplemented('DeleteProduct');
+  async deleteProduct(
+    request: DeleteProductRequest,
+    metadata?: Metadata,
+  ): Promise<DeleteProductResponse> {
+    requireAdmin(readIdentity(metadata));
+    await this.productService.remove(request);
+    return {};
   }
 
-  getProduct(_request: GetProductRequest): Promise<GetProductResponse> {
-    return unimplemented('GetProduct');
+  async getProduct(request: GetProductRequest): Promise<GetProductResponse> {
+    const product = await this.productService.get(request);
+    return { product: toProtoProduct(product) };
   }
 
-  listProducts(_request: ListProductsRequest): Promise<ListProductsResponse> {
-    return unimplemented('ListProducts');
+  async listProducts(request: ListProductsRequest): Promise<ListProductsResponse> {
+    const result = await this.productService.list(request);
+    return {
+      products: result.products.map(toProtoProduct),
+      pagination: {
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+        totalPages: result.totalPages,
+      },
+    };
   }
 
-  getProductsByIds(_request: GetProductsByIdsRequest): Promise<GetProductsByIdsResponse> {
-    return unimplemented('GetProductsByIds');
+  async getProductsByIds(request: GetProductsByIdsRequest): Promise<GetProductsByIdsResponse> {
+    const products = await this.productService.getByIds(request);
+    return { products: products.map(toProtoProduct) };
   }
 
   adjustStock(_request: AdjustStockRequest): Promise<AdjustStockResponse> {

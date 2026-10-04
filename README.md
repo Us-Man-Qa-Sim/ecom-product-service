@@ -4,9 +4,11 @@ Product catalog and stock management microservice for the ecom platform. Exposes
 
 ## Status
 
-Scaffolded (`PRD-1`): NestJS 12 hybrid app — gRPC transport on `:5002` for the `ecom.product.v1` package, HTTP `/health` on `:8082` (Mongoose ping via `@nestjs/terminus`), pino logging, `@nestjs/config` with a `zod` env schema, and a `ProductController` stub where every RPC answers gRPC `UNIMPLEMENTED`.
+Scaffolded (`PRD-1`): NestJS 12 hybrid app — gRPC transport on `:5002` for the `ecom.product.v1` package, HTTP `/health` on `:8082` (Mongoose ping via `@nestjs/terminus`), pino logging, `@nestjs/config` with a `zod` env schema.
 
-Schemas (`PRD-2`): the four Mongoose models live in `src/schemas/` — `Product` (catalog entry with embedded `stock.{available,reserved}`, `min: 0`-guarded money and stock, `Map` attributes, image URLs), `StockReservation` (per-order hold with embedded items and `ACTIVE`/`RELEASED`/`CONSUMED` status), `ProcessedEvent` (inbox, unique `eventId`) and `Outbox` (transactional outbox). All are registered and re-exported by `ProductModule`. The text index and `syncIndexes()` wiring are `PRD-3`; real RPC logic lands in `PRD-4` → `PRD-7`.
+Schemas (`PRD-2`): the four Mongoose models live in `src/schemas/` — `Product` (catalog entry with embedded `stock.{available,reserved}`, `min: 0`-guarded money and stock, `Map` attributes, image URLs), `StockReservation` (per-order hold with embedded items and `ACTIVE`/`RELEASED`/`CONSUMED` status), `ProcessedEvent` (inbox, unique `eventId`) and `Outbox` (transactional outbox). All are registered and re-exported by `ProductModule`.
+
+Sync CRUD + list (`PRD-4`): `CreateProduct`, `UpdateProduct`, `DeleteProduct`, `GetProduct`, `ListProducts`, `GetProductsByIds` are implemented. Writes require the forwarded identity to carry `role=ADMIN`; reads are anonymous. Filters: `category`, `isActive`, `priceMinor` range, full-text `search` over `name`+`description` (textScore-ranked when search is set). Pagination is 1-based, defaults to 20 rows, capped at 100. Only `AdjustStock` still returns `UNIMPLEMENTED` — it lands in `PRD-5`.
 
 ## Responsibilities
 
@@ -57,6 +59,9 @@ See `.env.example` for the full annotated list.
 
 ## Endpoints
 
-- gRPC: `ecom.product.v1.ProductService` on `GRPC_PORT` (all RPCs currently `UNIMPLEMENTED`)
+- gRPC: `ecom.product.v1.ProductService` on `GRPC_PORT`
+  - **Public reads** — `GetProduct`, `ListProducts`, `GetProductsByIds` (service-to-service; order-service calls this at order-creation time to snapshot name/price)
+  - **Admin writes** — `CreateProduct`, `UpdateProduct`, `DeleteProduct` (require `x-user-role: ADMIN` metadata forwarded by the gateway)
+  - **Deferred** — `AdjustStock` (`PRD-5`) still answers `UNIMPLEMENTED`
 - `GET /health` — liveness + MongoDB readiness (Terminus)
 - `GET /health/live` — process liveness only
