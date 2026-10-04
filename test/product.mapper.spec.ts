@@ -73,4 +73,14 @@ describe('toProtoProduct', () => {
     proto.images.push('mutated');
     expect(doc.images).toEqual(['https://img/1.png']);
   });
+
+  it('returns an empty attributes record when the document has no attributes Map', () => {
+    // Defensive branch: in practice the schema's `default: {}` ensures a Map
+    // is always present, but a doc built from scratch (e.g. by a buggy caller
+    // bypassing the Mongoose constructor) could still land here with
+    // `attributes = undefined`. The mapper must not throw in that case.
+    const doc = build();
+    Object.defineProperty(doc, 'attributes', { value: undefined, configurable: true });
+    expect(toProtoProduct(doc).attributes).toEqual({});
+  });
 });
