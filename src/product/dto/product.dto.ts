@@ -3,6 +3,14 @@ import { z } from 'zod';
 // Shared field schemas. Trimming + length caps protect the DB from accidental
 // whitespace-only inputs and runaway documents.
 
+// proto-loader runs with `defaults: true` (GRPC_LOADER_OPTIONS), which decodes
+// an unset message-typed field (`price`, `pagination`, the Attributes/Images
+// wrappers) as `null`, not `undefined`. zod's `.optional()` / `.default()` only
+// accept `undefined`, so normalise null first — otherwise every partial
+// UpdateProduct that omits `price` would be rejected.
+const absent = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((v) => (v === null ? undefined : v), schema);
+
 export const ObjectIdSchema = z
   .string()
   .trim()
@@ -62,9 +70,9 @@ export const UpdateProductInputSchema = z
     name: Name.optional(),
     description: Description.optional(),
     category: Category.optional(),
-    price: PriceInput.optional(),
-    attributes: AttributesUpdateWrapper.optional(),
-    images: ImagesUpdateWrapper.optional(),
+    price: absent(PriceInput.optional()),
+    attributes: absent(AttributesUpdateWrapper.optional()),
+    images: absent(ImagesUpdateWrapper.optional()),
     isActive: z.boolean().optional(),
   })
   .refine(
@@ -85,13 +93,18 @@ export type ProductIdInput = z.infer<typeof ProductIdSchema>;
 
 // Pagination defaults match the gateway contract (GW-5): 1-based page, cap at
 // 100 rows. The service re-asserts them so a direct caller cannot opt out.
+// proto3 int32 has no presence, so an omitted page/pageSize arrives as 0 —
+// treat 0 as "use the default", same as an omitted `pagination` message.
+const zeroAsUnset = (v: unknown) => (v === 0 || v === null ? undefined : v);
 export const ListProductsInputSchema = z.object({
-  pagination: z
-    .object({
-      page: z.number().int().min(1).default(1),
-      pageSize: z.number().int().min(1).max(100).default(20),
-    })
-    .default({ page: 1, pageSize: 20 }),
+  pagination: absent(
+    z
+      .object({
+        page: z.preprocess(zeroAsUnset, z.number().int().min(1).default(1)),
+        pageSize: z.preprocess(zeroAsUnset, z.number().int().min(1).max(100).default(20)),
+      })
+      .default({ page: 1, pageSize: 20 }),
+  ),
   category: Category.optional(),
   search: z.string().trim().min(1).max(200).optional(),
   isActive: z.boolean().optional(),

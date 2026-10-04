@@ -21,7 +21,7 @@ import { StockReservation, StockReservationSchema } from '../schemas/stock-reser
  * app: no gRPC server, no HTTP listener, just connect → sync → disconnect.
  */
 
-const MODELS = [
+export const MODELS = [
   { name: Product.name, schema: ProductSchema },
   { name: Outbox.name, schema: OutboxSchema },
   { name: ProcessedEvent.name, schema: ProcessedEventSchema },
@@ -51,7 +51,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error('[sync-indexes] failed', err);
-  process.exit(1);
-});
+// Self-invoke only as the program entry point (`node dist/scripts/sync-indexes.js`
+// from the Docker entrypoint) so tests can import MODELS without connecting.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[sync-indexes] failed', err);
+    process.exit(1);
+  });
+}

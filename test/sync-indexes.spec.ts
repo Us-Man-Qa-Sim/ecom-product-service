@@ -1,66 +1,57 @@
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { Mongoose, Schema } from 'mongoose';
-import { Outbox, OutboxSchema } from '../src/schemas/outbox.schema';
-import { ProcessedEvent, ProcessedEventSchema } from '../src/schemas/processed-event.schema';
-import { Product, ProductSchema } from '../src/schemas/product.schema';
-import { StockReservation, StockReservationSchema } from '../src/schemas/stock-reservation.schema';
+import { MODELS } from '../src/scripts/sync-indexes';
 
 // `src/scripts/sync-indexes.ts` is a short-lived standalone script that opens
 // its own connection, iterates the model list, and calls `syncIndexes()` on
 // each. The lifecycle (connect/close) is not worth testing without a live
-// Mongo, but we can lock in the two things that would silently rot:
-//   1. Every @Schema in `src/schemas/` is driven by the script. If someone
-//      adds a schema and forgets to register it here, production indexes
-//      drift on the next deploy.
-//   2. Each `syncIndexes()` is awaited sequentially so a failure stops the
-//      script with a non-zero exit (the Docker entrypoint depends on this).
+// Mongo, but we can lock in the thing that would silently rot: every
+// collection-backed @Schema in `src/schemas/` must be in the script's MODELS
+// table. If someone adds a schema and forgets to register it there, production
+// indexes (autoIndex is off) never get built.
+//
+// The script only self-invokes as the program entry point, so importing MODELS
+// here does not open a connection.
 
-// A short recreation of the MODELS table from the script. Tests below assert
-// the real list stays in sync with the schema folder.
-const SCRIPT_MODELS = [
-  { name: Product.name, schema: ProductSchema },
-  { name: Outbox.name, schema: OutboxSchema },
-  { name: ProcessedEvent.name, schema: ProcessedEventSchema },
-  { name: StockReservation.name, schema: StockReservationSchema },
-] as const;
+// Discover top-level schemas by scanning the folder rather than listing them by
+// hand — a hand-written list would rot exactly like the MODELS table could.
+// Embedded sub-schemas (`ProductStock`, `StockReservationItem`) declare no
+// `collection`, which is how they are told apart from collection-backed ones.
+function collectionSchemasInFolder(): Set<Schema> {
+  const dir = join(__dirname, '..', 'src', 'schemas');
+  const found = new Set<Schema>();
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.schema.ts'))) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const exports = require(join(dir, file)) as Record<string, unknown>;
+    for (const value of Object.values(exports)) {
+      if (value instanceof Schema && value.get('collection')) found.add(value);
+    }
+  }
+  return found;
+}
 
 describe('sync-indexes model list', () => {
-  it('covers every @Schema exported from src/schemas/', () => {
-    // The authoritative set is whatever is importable from the schemas folder.
-    const expected = new Set([
-      Product.name,
-      Outbox.name,
-      ProcessedEvent.name,
-      StockReservation.name,
-    ]);
-    const actual = new Set(SCRIPT_MODELS.map((m) => m.name));
-    expect(actual).toEqual(expected);
+  it('registers every collection-backed @Schema exported from src/schemas/', () => {
+    const expected = collectionSchemasInFolder();
+    expect(expected.size).toBeGreaterThan(0);
+    expect(new Set(MODELS.map((m) => m.schema))).toEqual(expected);
   });
 
-  it('ties each registered name to a real Schema instance', () => {
-    for (const { name, schema } of SCRIPT_MODELS) {
-      expect(name).toMatch(/^[A-Z]/);
-      expect(schema).toBeInstanceOf(Schema);
-    }
+  it('registers each model under a unique PascalCase name', () => {
+    const names = MODELS.map((m) => m.name);
+    expect(new Set(names).size).toBe(names.length);
+    for (const name of names) expect(name).toMatch(/^[A-Z]/);
   });
 });
 
 describe('sync-indexes runtime shape', () => {
   // Build the models on an isolated Mongoose instance (no DB) so we can
-  // confirm `syncIndexes` is wired on each, and that building the models
-  // from the registered schemas is a no-op side-effect-wise (no implicit
-  // index build, since no connection).
+  // confirm `syncIndexes` is wired on each, without an implicit index build.
   const mongoose = new Mongoose();
 
-  afterAll(async () => {
-    // Nothing was ever connected — this is defensive against a future test
-    // that opens a connection on this instance.
-    for (const conn of mongoose.connections) {
-      if (conn.readyState !== 0) await conn.close();
-    }
-  });
-
   it('each registered schema builds a model that exposes syncIndexes', () => {
-    for (const { name, schema } of SCRIPT_MODELS) {
+    for (const { name, schema } of MODELS) {
       const model = mongoose.model(name, schema);
       expect(typeof model.syncIndexes).toBe('function');
     }

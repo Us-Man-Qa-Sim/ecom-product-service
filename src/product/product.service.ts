@@ -55,7 +55,7 @@ export class ProductService {
     const update = buildUpdate(input);
     const doc = await this.productModel
       .findByIdAndUpdate(input.productId, update, {
-        new: true,
+        returnDocument: 'after',
         runValidators: true,
       })
       .exec();
@@ -127,7 +127,7 @@ export class ProductService {
       .findOneAndUpdate(
         filter,
         { $inc: { 'stock.available': input.delta } },
-        { new: true, runValidators: true },
+        { returnDocument: 'after', runValidators: true },
       )
       .exec();
 

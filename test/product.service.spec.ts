@@ -346,6 +346,40 @@ describe('ProductService.update', () => {
     expect(stub.store[0].attributes).toEqual({});
   });
 
+  // Exact shape @grpc/proto-loader (`defaults: true`, `oneofs: true`) decodes a
+  // name-only UpdateProduct into: unset message fields are `null`, and proto3
+  // `optional` scalars carry a synthetic `_name` oneof key.
+  it('accepts the proto-loader wire shape (null for unset message fields)', async () => {
+    const r = row({ images: ['https://keep/1.png'], attributes: { color: 'red' } });
+    const stub = makeModelStub([r]);
+    const svc = new ProductService(stub.model);
+    const updated = await svc.update({
+      productId: r._id.toString(),
+      price: null,
+      attributes: null,
+      images: null,
+      name: 'Renamed',
+      _name: 'name',
+    });
+    expect(updated.name).toBe('Renamed');
+    expect(stub.store[0].priceMinor).toBe(1000);
+    expect(stub.store[0].images).toEqual(['https://keep/1.png']);
+    expect(stub.store[0].attributes).toEqual({ color: 'red' });
+  });
+
+  it('rejects a wire-shape update where every field is unset', async () => {
+    const stub = makeModelStub([row()]);
+    const svc = new ProductService(stub.model);
+    await expect(
+      svc.update({
+        productId: stub.store[0]._id.toString(),
+        price: null,
+        attributes: null,
+        images: null,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
   it('throws NotFoundError for an unknown id', async () => {
     const stub = makeModelStub();
     const svc = new ProductService(stub.model);
@@ -457,6 +491,20 @@ describe('ProductService.list', () => {
     expect(result.total).toBe(4);
     expect(result.totalPages).toBe(1);
     expect(result.products).toHaveLength(4);
+  });
+
+  // proto-loader decodes an omitted `pagination` message as null, and an
+  // omitted int32 inside it as 0 (proto3 has no scalar presence).
+  it.each([
+    ['null pagination', { pagination: null }],
+    ['zeroed pagination', { pagination: { page: 0, pageSize: 0 } }],
+  ])('applies defaults for %s from the wire', async (_label, input) => {
+    const stub = makeModelStub(seed());
+    const svc = new ProductService(stub.model);
+    const result = await svc.list(input);
+    expect(result.page).toBe(1);
+    expect(result.pageSize).toBe(20);
+    expect(result.total).toBe(4);
   });
 
   it('filters by category', async () => {
