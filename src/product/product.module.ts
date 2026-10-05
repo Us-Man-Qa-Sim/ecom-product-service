@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { OrderCancelledHandler } from '../kafka/handlers/order-cancelled.handler';
 import { OrderCreatedHandler } from '../kafka/handlers/order-created.handler';
 import { Outbox, OutboxSchema } from '../schemas/outbox.schema';
 import { ProcessedEvent, ProcessedEventSchema } from '../schemas/processed-event.schema';
@@ -23,7 +24,7 @@ const MODELS = MongooseModule.forFeature([
 @Module({
   imports: [MODELS],
   controllers: [ProductController],
-  providers: [ProductService, OrderCreatedHandler],
+  providers: [ProductService, OrderCreatedHandler, OrderCancelledHandler],
   exports: [MODELS, ProductService],
 })
 export class ProductModule {}
