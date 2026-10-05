@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import type { Env } from '../src/config/env.validation';
+import { CorrelationService } from '../src/correlation/correlation.service';
 import { KafkaConsumerService } from '../src/kafka/kafka-consumer.service';
 import type { TopicHandler } from '../src/kafka/consumer';
 import { TOPICS } from '@us-man-qa-sim/ecom-contracts/events';
@@ -82,7 +83,7 @@ describe('KafkaConsumerService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     capturedEachMessage = undefined;
-    service = new KafkaConsumerService(makeConfig());
+    service = new KafkaConsumerService(makeConfig(), new CorrelationService());
   });
 
   describe('subscribe', () => {
@@ -293,6 +294,7 @@ describe('KafkaConsumerService', () => {
     it('caps backoff delay at retryMaxMs', async () => {
       const svc = new KafkaConsumerService(
         makeConfig({ KAFKA_CONSUMER_RETRY_BASE_MS: 1000, KAFKA_CONSUMER_RETRY_MAX_MS: 50 }),
+        new CorrelationService(),
       );
       const h = jest.fn()
         .mockRejectedValueOnce(new Error('fail'))
