@@ -41,7 +41,14 @@ function makeModels() {
 
   const consumerService = { subscribe: jest.fn() };
 
-  return { processedEventModel, reservationModel, productModel, outboxModel, connection, consumerService };
+  return {
+    processedEventModel,
+    reservationModel,
+    productModel,
+    outboxModel,
+    connection,
+    consumerService,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -376,5 +383,55 @@ describe('KFK-7: out-of-order event handling', () => {
         expect.anything(),
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unusable order.created payloads must fail the reservation, not throw — a
+// throw is retried, dropped as poison, and the order would stay PENDING.
+// ---------------------------------------------------------------------------
+
+describe('OrderCreatedHandler — unusable items', () => {
+  function build() {
+    const models = makeModels();
+    const handler = new OrderCreatedHandler(
+      models.connection as any,
+      models.productModel as any,
+      models.reservationModel as any,
+      models.processedEventModel as any,
+      models.outboxModel as any,
+      models.consumerService as any,
+    );
+    return { models, handler };
+  }
+
+  function outboxTopics(models: ReturnType<typeof makeModels>): string[] {
+    return models.outboxModel.create.mock.calls.map((c) => c[0][0].eventType);
+  }
+
+  it.each(['not-an-object-id', '123', 'zzzzzzzzzzzzzzzzzzzzzzzz'])(
+    'emits stock-reservation-failed for malformed productId %p',
+    async (productId) => {
+      const { models, handler } = build();
+
+      await expect(handler.handle(orderCreatedEvent(uuid(), productId))).resolves.toBeUndefined();
+
+      expect(models.productModel.updateOne).not.toHaveBeenCalled();
+      expect(models.reservationModel.create).not.toHaveBeenCalled();
+      expect(outboxTopics(models)).toEqual([TOPICS.ORDER_STOCK_RESERVATION_FAILED]);
+      const envelope = models.outboxModel.create.mock.calls[0][0][0].payload;
+      expect(envelope.payload.reason).toContain(`product ${productId} not found`);
+    },
+  );
+
+  it('emits stock-reservation-failed for an order with no items', async () => {
+    const { models, handler } = build();
+    const event = orderCreatedEvent();
+    event.payload.items = [];
+
+    await handler.handle(event);
+
+    expect(models.reservationModel.create).not.toHaveBeenCalled();
+    expect(outboxTopics(models)).toEqual([TOPICS.ORDER_STOCK_RESERVATION_FAILED]);
   });
 });

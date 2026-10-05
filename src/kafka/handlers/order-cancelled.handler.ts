@@ -35,10 +35,9 @@ export class OrderCancelledHandler implements TopicHandler<'order.cancelled'>, O
 
     try {
       await this.connection.transaction(async (session) => {
-        await this.processedEventModel.create(
-          [{ eventId, eventType: TOPICS.ORDER_CANCELLED }],
-          { session },
-        );
+        await this.processedEventModel.create([{ eventId, eventType: TOPICS.ORDER_CANCELLED }], {
+          session,
+        });
 
         const reservation = await this.reservationModel
           .findOne({ orderId })
@@ -46,13 +45,15 @@ export class OrderCancelledHandler implements TopicHandler<'order.cancelled'>, O
           .exec();
 
         if (!reservation) {
-          // KFK-7: cancellation arrived before order.created — plant a tombstone
-          // so a late-arriving reservation attempt is blocked by the unique orderId index.
+          // Either the reservation failed (normal: order-service cancels after
+          // stock-reservation-failed, and nothing was held) or — KFK-7 — the
+          // cancellation overtook order.created. Plant a tombstone either way so
+          // a late order.created sees it and reserves nothing.
           await this.reservationModel.create(
             [{ orderId, items: [], status: 'RELEASED' as const }],
             { session },
           );
-          this.logger.warn({ orderId }, 'Cancellation arrived before reservation; tombstone created');
+          this.logger.log({ orderId }, 'No active reservation to release; tombstone created');
           return;
         }
 

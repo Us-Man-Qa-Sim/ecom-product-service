@@ -6,8 +6,8 @@ export type OutboxDocument = HydratedDocument<Outbox>;
 /**
  * Transactional outbox (SCHEMAS.md §3). The reserve/release/consume handlers
  * write the event to emit into this collection in the same transaction as the
- * domain change; the Mongo outbox relay (KFK-3) later claims unsent rows with
- * `findOneAndUpdate({ sentAt: null }, …)`, publishes to Kafka, and stamps
+ * domain change; the Mongo outbox relay (KFK-3) later claims an unsent row by
+ * setting a `claimedUntil` lease, publishes it to Kafka, and only then stamps
  * `sentAt`. `createdAt`/`sentAt` are declared explicitly (no `timestamps`)
  * because the relay queries and orders on them directly.
  */
@@ -30,12 +30,15 @@ export class Outbox {
 
   @Prop({ type: Date, default: null })
   sentAt!: Date | null; // null until the relay publishes to Kafka
+
+  @Prop({ type: Date, default: null })
+  claimedUntil!: Date | null; // relay lease; an expired lease can be re-claimed
 }
 
 export const OutboxSchema = SchemaFactory.createForClass(Outbox);
 
 // Relay poll index (SCHEMAS.md §3). The Mongo relay (KFK-3) claims unsent rows
-// with `findOneAndUpdate({ sentAt: null }, …)`; indexing `sentAt` keeps that
+// with `findOneAndUpdate({ sentAt: null, <lease free> }, …)`; indexing `sentAt` keeps that
 // scan cheap once most rows are sent. Built explicitly via `syncIndexes()`
 // (PRD-3) because `autoIndex` is off in production.
 OutboxSchema.index({ sentAt: 1 });

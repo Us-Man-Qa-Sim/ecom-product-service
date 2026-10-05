@@ -27,9 +27,7 @@ export const envSchema = z.object({
   // transactions (stock reservation, KFK-2) require it. See infra/docker-compose.yml.
   MONGO_URI: z.string().min(1),
 
-  // Kafka brokers. The product-service becomes a producer/consumer in the Kafka
-  // phase (KFK-2/KFK-3); kept here so compose can inject it and env validation
-  // passes before that wiring lands.
+  // Kafka: producer (outbox relay, KFK-3) + consumer group (KFK-2/5/6).
   KAFKA_BROKERS: z.string().default('localhost:9092'),
   KAFKA_CLIENT_ID: z.string().default('product-service'),
   KAFKA_CONSUMER_GROUP_ID: z.string().default('product-service'),
@@ -44,6 +42,9 @@ export const envSchema = z.object({
   OUTBOX_RELAY_POLL_INTERVAL_MS: numericString(250),
   OUTBOX_RELAY_BATCH_SIZE: numericString(32),
   OUTBOX_RELAY_ERROR_BACKOFF_MS: numericString(5_000),
+  // How long a claimed outbox row stays invisible to other relay ticks. Must
+  // exceed the producer send timeout (30 s) so a slow publish is not re-claimed.
+  OUTBOX_RELAY_CLAIM_TTL_MS: numericString(60_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

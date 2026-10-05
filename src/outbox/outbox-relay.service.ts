@@ -14,25 +14,27 @@ import { PUBLISHER, Publisher } from '../kafka/publisher';
 
 // KFK-3: outbox relay (Mongo version).
 //
-// Mongo has no row-level advisory locks (`SELECT … FOR UPDATE SKIP LOCKED`),
-// so we use a claim-and-release pattern with `findOneAndUpdate`:
+// Mongo has no row-level locks (`SELECT … FOR UPDATE SKIP LOCKED`), so rows are
+// claimed with a lease:
 //
-//   1. `findOneAndUpdate({ sentAt: null }, { $set: { sentAt: <claimTimestamp> } })`
-//      atomically claims one unsent row — the returned doc is ours exclusively
-//      because no other relay will see `sentAt: null` for it.
+//   1. `findOneAndUpdate({ sentAt: null, claimedUntil: null | expired },
+//      { $set: { claimedUntil: now + OUTBOX_RELAY_CLAIM_TTL_MS } })` atomically
+//      claims one unsent row — no other relay can claim it while the lease runs.
 //   2. Publish the envelope to Kafka.
-//   3. On success the row stays stamped (done). On failure, unset `sentAt` back
-//      to `null` so the row is retried on the next tick.
+//   3. On success stamp `sentAt` (and clear the lease). On failure clear the
+//      lease so the row is retried on the next tick.
+//
+// `sentAt` is only ever written *after* a successful publish. If the process
+// dies between claim and publish, the lease simply expires and another tick
+// (or another instance) re-claims the row — at-least-once, never lost. If it
+// dies between publish and the `sentAt` stamp, the row is published twice;
+// consumers dedupe on `eventId` (inbox), so that is harmless.
 //
 // Compared to the Postgres relay (USR-8 / ORD-8):
-// - No transaction wrapping the batch: each row is claimed, published and either
-//   kept or released independently. A Kafka outage mid-batch loses no work —
-//   already-published rows stay stamped, the failed row is released.
+// - No transaction wrapping the batch: each row is claimed, published and
+//   stamped or released independently. A Kafka outage mid-batch loses no work.
 // - Concurrent relay instances are safe: `findOneAndUpdate` is atomic and the
-//   `sentAt: null` filter acts as a natural SKIP LOCKED — two instances will
-//   never claim the same row.
-// - The cost is one extra write when publish fails (the release). That is rare
-//   and cheap compared to the safety it buys.
+//   lease filter acts as SKIP LOCKED.
 @Injectable()
 export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(OutboxRelayService.name);
@@ -40,6 +42,7 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
   private readonly pollIntervalMs: number;
   private readonly batchSize: number;
   private readonly errorBackoffMs: number;
+  private readonly claimTtlMs: number;
 
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -54,6 +57,7 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
     this.pollIntervalMs = config.get('OUTBOX_RELAY_POLL_INTERVAL_MS', { infer: true });
     this.batchSize = config.get('OUTBOX_RELAY_BATCH_SIZE', { infer: true });
     this.errorBackoffMs = config.get('OUTBOX_RELAY_ERROR_BACKOFF_MS', { infer: true });
+    this.claimTtlMs = config.get('OUTBOX_RELAY_CLAIM_TTL_MS', { infer: true });
   }
 
   onApplicationBootstrap(): void {
@@ -86,36 +90,40 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
     let processed = 0;
 
     for (let i = 0; i < this.batchSize; i++) {
-      const claimTimestamp = new Date();
+      const now = new Date();
 
       const doc = await this.outboxModel.findOneAndUpdate(
-        { sentAt: null },
-        { $set: { sentAt: claimTimestamp } },
+        {
+          sentAt: null,
+          $or: [{ claimedUntil: null }, { claimedUntil: { $lte: now } }],
+        },
+        { $set: { claimedUntil: new Date(now.getTime() + this.claimTtlMs) } },
         { sort: { createdAt: 1 }, returnDocument: 'after' },
       );
 
       if (!doc) break;
 
       try {
-        const envelope = doc.payload as Record<string, unknown>;
+        const envelope = doc.payload;
         const correlationId =
-          typeof envelope.correlationId === 'string'
-            ? envelope.correlationId
-            : undefined;
+          typeof envelope.correlationId === 'string' ? envelope.correlationId : undefined;
 
         await this.publisher.publish({
           topic: doc.eventType,
           key: doc.aggregateId,
           value: JSON.stringify(doc.payload),
-          headers: correlationId
-            ? { 'x-correlation-id': correlationId }
-            : undefined,
+          headers: correlationId ? { 'x-correlation-id': correlationId } : undefined,
         });
-        processed++;
       } catch (err) {
-        await this.outboxModel.updateOne({ _id: doc._id }, { $set: { sentAt: null } });
+        await this.outboxModel.updateOne({ _id: doc._id }, { $set: { claimedUntil: null } });
         throw err;
       }
+
+      await this.outboxModel.updateOne(
+        { _id: doc._id },
+        { $set: { sentAt: new Date(), claimedUntil: null } },
+      );
+      processed++;
     }
 
     return processed;

@@ -52,10 +52,7 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
         // 2. KFK-7: a terminal event (cancel/ship) may have arrived first and
         //    planted a tombstone reservation. If one exists, skip — the order is
         //    already in a terminal state on the order-service side.
-        const existing = await this.reservationModel
-          .findOne({ orderId })
-          .session(session)
-          .exec();
+        const existing = await this.reservationModel.findOne({ orderId }).session(session).exec();
 
         if (existing) {
           this.logger.warn(
@@ -65,8 +62,14 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
           return;
         }
 
-        // 3. Load every referenced product in one round-trip
-        const productIds = items.map((i) => new Types.ObjectId(i.productId));
+        // 3. Load every referenced product in one round-trip. The contract only
+        //    guarantees a non-empty string, so a malformed id is reported as a
+        //    failed reservation (below) instead of throwing — a throw would be
+        //    retried, dropped as poison, and leave the order PENDING forever.
+        const productIds = items
+          .map((i) => i.productId)
+          .filter((id) => Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id)
+          .map((id) => new Types.ObjectId(id));
         const products = await this.productModel
           .find({ _id: { $in: productIds } })
           .session(session)
@@ -76,6 +79,9 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
 
         // 4. Check availability (all-or-nothing)
         const failures: string[] = [];
+        if (items.length === 0) {
+          failures.push('order has no items');
+        }
         for (const item of items) {
           const product = productMap.get(item.productId);
           if (!product) {

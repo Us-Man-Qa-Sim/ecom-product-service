@@ -13,6 +13,7 @@ interface OutboxRow {
   payload: Record<string, unknown>;
   createdAt: Date;
   sentAt: Date | null;
+  claimedUntil: Date | null;
 }
 
 function envelope(aggregateId: string, type: string): OutboxRow {
@@ -31,30 +32,40 @@ function envelope(aggregateId: string, type: string): OutboxRow {
     },
     createdAt: new Date(),
     sentAt: null,
+    claimedUntil: null,
   };
 }
+
+type ClaimFilter = {
+  sentAt: null;
+  $or: [{ claimedUntil: null }, { claimedUntil: { $lte: Date } }];
+};
 
 function makeOutboxModel(initial: OutboxRow[]) {
   const rows = [...initial];
 
+  const claimable = (r: OutboxRow, now: Date) =>
+    r.sentAt === null && (r.claimedUntil === null || r.claimedUntil <= now);
+
   const findOneAndUpdate = jest.fn(
     async (
-      filter: { sentAt: null },
-      update: { $set: { sentAt: Date } },
+      filter: ClaimFilter,
+      update: { $set: { claimedUntil: Date } },
       _options: { sort: { createdAt: number }; returnDocument: string },
     ) => {
-      const idx = rows.findIndex((r) => r.sentAt === null);
+      const now = filter.$or[1].claimedUntil.$lte;
+      const idx = rows.findIndex((r) => claimable(r, now));
       if (idx === -1) return null;
-      rows[idx] = { ...rows[idx], sentAt: update.$set.sentAt };
+      rows[idx] = { ...rows[idx], claimedUntil: update.$set.claimedUntil };
       return rows[idx];
     },
   );
 
   const updateOne = jest.fn(
-    async (filter: { _id: Types.ObjectId }, update: { $set: { sentAt: null } }) => {
+    async (filter: { _id: Types.ObjectId }, update: { $set: Partial<OutboxRow> }) => {
       const idx = rows.findIndex((r) => r._id.equals(filter._id));
       if (idx !== -1) {
-        rows[idx] = { ...rows[idx], sentAt: update.$set.sentAt };
+        rows[idx] = { ...rows[idx], ...update.$set };
       }
       return { modifiedCount: idx !== -1 ? 1 : 0 };
     },
@@ -76,6 +87,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): ConfigService {
     OUTBOX_RELAY_POLL_INTERVAL_MS: 250,
     OUTBOX_RELAY_BATCH_SIZE: 32,
     OUTBOX_RELAY_ERROR_BACKOFF_MS: 5000,
+    OUTBOX_RELAY_CLAIM_TTL_MS: 60_000,
     ...overrides,
   };
   return { get: (k: string) => values[k] } as unknown as ConfigService;
@@ -104,13 +116,15 @@ describe('OutboxRelayService.drainOnce', () => {
       envelope('order-1', 'order.stock-reserved'),
       envelope('order-2', 'order.stock-reservation-failed'),
     ];
-    const { model, findOneAndUpdate } = makeOutboxModel(rows);
+    const { model, findOneAndUpdate, sent } = makeOutboxModel(rows);
     const { publisher, publish } = makePublisher();
     const relay = makeRelay(model, publisher);
 
     const processed = await relay.drainOnce();
 
     expect(processed).toBe(2);
+    expect(sent()).toHaveLength(2);
+    expect(sent().every((r) => r.claimedUntil === null)).toBe(true);
     expect(findOneAndUpdate).toHaveBeenCalledTimes(3); // 2 claims + 1 null return
     expect(publish).toHaveBeenCalledTimes(2);
     expect(publish.mock.calls[0][0]).toMatchObject({
@@ -146,8 +160,51 @@ describe('OutboxRelayService.drainOnce', () => {
     const relay = makeRelay(model, { publish } as unknown as Publisher);
 
     await expect(relay.drainOnce()).rejects.toThrow('kafka down');
-    expect(updateOne).toHaveBeenCalledWith({ _id: rows[0]._id }, { $set: { sentAt: null } });
+    expect(updateOne).toHaveBeenCalledWith({ _id: rows[0]._id }, { $set: { claimedUntil: null } });
     expect(unsent()).toHaveLength(1);
+    expect(unsent()[0].claimedUntil).toBeNull();
+  });
+
+  it('never stamps sentAt before the publish succeeds', async () => {
+    const rows = [envelope('order-p', 'order.stock-reserved')];
+    const { model, rows: current } = makeOutboxModel(rows);
+    let sentAtDuringPublish: Date | null | undefined;
+    const publish = jest.fn(async () => {
+      sentAtDuringPublish = current()[0].sentAt;
+    });
+    const relay = makeRelay(model, { publish } as unknown as Publisher);
+
+    await relay.drainOnce();
+
+    expect(sentAtDuringPublish).toBeNull();
+    expect(current()[0].sentAt).toBeInstanceOf(Date);
+  });
+
+  it('re-claims a row whose lease expired (relay crashed mid-publish)', async () => {
+    const crashed = {
+      ...envelope('order-z', 'order.stock-reserved'),
+      claimedUntil: new Date(Date.now() - 1_000),
+    };
+    const { model, sent } = makeOutboxModel([crashed]);
+    const { publisher, publish } = makePublisher();
+    const relay = makeRelay(model, publisher);
+
+    expect(await relay.drainOnce()).toBe(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(sent()).toHaveLength(1);
+  });
+
+  it('skips a row whose lease is still held by another relay', async () => {
+    const held = {
+      ...envelope('order-h', 'order.stock-reserved'),
+      claimedUntil: new Date(Date.now() + 30_000),
+    };
+    const { model } = makeOutboxModel([held]);
+    const { publisher, publish } = makePublisher();
+    const relay = makeRelay(model, publisher);
+
+    expect(await relay.drainOnce()).toBe(0);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('stops after batchSize rows even when more are available', async () => {
@@ -168,7 +225,7 @@ describe('OutboxRelayService.drainOnce', () => {
     expect(findOneAndUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it('claims rows with sentAt: null filter and createdAt sort', async () => {
+  it('claims unsent, unleased rows in createdAt order with a TTL lease', async () => {
     const { model, findOneAndUpdate } = makeOutboxModel([
       envelope('order-x', 'order.stock-reserved'),
     ]);
@@ -177,7 +234,13 @@ describe('OutboxRelayService.drainOnce', () => {
 
     await relay.drainOnce();
 
-    expect(findOneAndUpdate.mock.calls[0][0]).toEqual({ sentAt: null });
+    const [filter, update] = findOneAndUpdate.mock.calls[0];
+    expect(filter).toEqual({
+      sentAt: null,
+      $or: [{ claimedUntil: null }, { claimedUntil: { $lte: expect.any(Date) } }],
+    });
+    const now = filter.$or[1].claimedUntil.$lte.getTime();
+    expect(update.$set.claimedUntil.getTime() - now).toBe(60_000);
     expect(findOneAndUpdate.mock.calls[0][2]).toMatchObject({
       sort: { createdAt: 1 },
       returnDocument: 'after',

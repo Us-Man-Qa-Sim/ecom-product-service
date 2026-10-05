@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
+import { KafkaJS } from '@confluentinc/kafka-javascript';
 import type { Env } from '../src/config/env.validation';
 import { CorrelationService } from '../src/correlation/correlation.service';
 import { KafkaConsumerService } from '../src/kafka/kafka-consumer.service';
@@ -28,6 +29,17 @@ jest.mock('@confluentinc/kafka-javascript', () => ({
     })),
   },
 }));
+
+// Manual commits (inbox + at-least-once) and earliest offset for a new group,
+// so events produced before the first deploy of this service are not skipped.
+function expectConsumerConfig(): void {
+  const kafka = (KafkaJS.Kafka as unknown as jest.Mock).mock.results.at(-1)!.value as {
+    consumer: jest.Mock;
+  };
+  expect(kafka.consumer).toHaveBeenCalledWith({
+    kafkaJS: { groupId: 'product-service', autoCommit: false, fromBeginning: true },
+  });
+}
 
 function makeConfig(overrides: Record<string, unknown> = {}): ConfigService<Env, true> {
   const values: Record<string, unknown> = {
@@ -124,6 +136,7 @@ describe('KafkaConsumerService', () => {
       expect(consumerRun).toHaveBeenCalledWith({
         eachMessage: expect.any(Function),
       });
+      expectConsumerConfig();
     });
   });
 
@@ -211,9 +224,7 @@ describe('KafkaConsumerService', () => {
     });
 
     it('retries and succeeds on second attempt', async () => {
-      handle
-        .mockRejectedValueOnce(new Error('transient failure'))
-        .mockResolvedValueOnce(undefined);
+      handle.mockRejectedValueOnce(new Error('transient failure')).mockResolvedValueOnce(undefined);
 
       const envelope = validEnvelope(TOPICS.ORDER_CREATED);
       const msg = kafkaMessage(JSON.stringify(envelope));
@@ -258,9 +269,7 @@ describe('KafkaConsumerService', () => {
     });
 
     it('applies backoff delay between retries', async () => {
-      handle
-        .mockRejectedValueOnce(new Error('fail'))
-        .mockResolvedValueOnce(undefined);
+      handle.mockRejectedValueOnce(new Error('fail')).mockResolvedValueOnce(undefined);
 
       const sleepSpy = jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
       const envelope = validEnvelope(TOPICS.ORDER_CREATED);
@@ -296,9 +305,7 @@ describe('KafkaConsumerService', () => {
         makeConfig({ KAFKA_CONSUMER_RETRY_BASE_MS: 1000, KAFKA_CONSUMER_RETRY_MAX_MS: 50 }),
         new CorrelationService(),
       );
-      const h = jest.fn()
-        .mockRejectedValueOnce(new Error('fail'))
-        .mockResolvedValueOnce(undefined);
+      const h = jest.fn().mockRejectedValueOnce(new Error('fail')).mockResolvedValueOnce(undefined);
       svc.subscribe(TOPICS.ORDER_CREATED, { handle: h });
       await svc.onApplicationBootstrap();
 

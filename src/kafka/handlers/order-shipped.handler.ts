@@ -35,10 +35,9 @@ export class OrderShippedHandler implements TopicHandler<'order.shipped'>, OnMod
 
     try {
       await this.connection.transaction(async (session) => {
-        await this.processedEventModel.create(
-          [{ eventId, eventType: TOPICS.ORDER_SHIPPED }],
-          { session },
-        );
+        await this.processedEventModel.create([{ eventId, eventType: TOPICS.ORDER_SHIPPED }], {
+          session,
+        });
 
         const reservation = await this.reservationModel
           .findOne({ orderId })

@@ -43,8 +43,12 @@ export class KafkaConsumerService implements OnApplicationBootstrap, OnApplicati
       return;
     }
 
+    // fromBeginning: a brand-new consumer group (first deploy, or a group that
+    // was reset) starts at the earliest offset instead of `latest`, so events
+    // produced before this service first joined are not silently skipped.
+    // Once the group has committed offsets this setting has no effect.
     this.consumer = this.kafka.consumer({
-      kafkaJS: { groupId: this.groupId, autoCommit: false },
+      kafkaJS: { groupId: this.groupId, autoCommit: false, fromBeginning: true },
     });
     await this.consumer.connect();
 
@@ -124,7 +128,15 @@ export class KafkaConsumerService implements OnApplicationBootstrap, OnApplicati
           if (attempt < this.maxRetries) {
             const delay = this.backoffDelay(attempt);
             this.logger.warn(
-              { err, topic, partition, offset: message.offset, attempt, maxRetries: this.maxRetries, nextRetryMs: delay },
+              {
+                err,
+                topic,
+                partition,
+                offset: message.offset,
+                attempt,
+                maxRetries: this.maxRetries,
+                nextRetryMs: delay,
+              },
               'Handler failed, retrying after backoff',
             );
             await this.sleep(delay);

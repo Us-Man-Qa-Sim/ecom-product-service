@@ -89,11 +89,9 @@ describe('KFK-10: concurrency — N parallel orders for the last unit', () => {
   }
 
   it('exactly one handler writes stock-reserved; N−1 throw on the $gte guard', async () => {
-    const { models, handler, getAvailableStock } = buildRaceScenario();
+    const { handler } = buildRaceScenario();
 
-    const events = Array.from({ length: N }, () =>
-      orderCreatedEvent(uuid(), productId),
-    );
+    const events = Array.from({ length: N }, () => orderCreatedEvent(uuid(), productId));
 
     const results = await Promise.allSettled(events.map((e) => handler.handle(e)));
 
@@ -113,9 +111,7 @@ describe('KFK-10: concurrency — N parallel orders for the last unit', () => {
   it('produces exactly one stock-reserved outbox event', async () => {
     const { models, handler } = buildRaceScenario();
 
-    const events = Array.from({ length: N }, () =>
-      orderCreatedEvent(uuid(), productId),
-    );
+    const events = Array.from({ length: N }, () => orderCreatedEvent(uuid(), productId));
 
     await Promise.allSettled(events.map((e) => handler.handle(e)));
 
@@ -134,9 +130,7 @@ describe('KFK-10: concurrency — N parallel orders for the last unit', () => {
   it('creates exactly one ACTIVE reservation', async () => {
     const { models, handler } = buildRaceScenario();
 
-    const events = Array.from({ length: N }, () =>
-      orderCreatedEvent(uuid(), productId),
-    );
+    const events = Array.from({ length: N }, () => orderCreatedEvent(uuid(), productId));
 
     await Promise.allSettled(events.map((e) => handler.handle(e)));
 
@@ -150,9 +144,7 @@ describe('KFK-10: concurrency — N parallel orders for the last unit', () => {
   it('never drives available stock below zero', async () => {
     const { handler, getAvailableStock } = buildRaceScenario();
 
-    const events = Array.from({ length: N }, () =>
-      orderCreatedEvent(uuid(), productId),
-    );
+    const events = Array.from({ length: N }, () => orderCreatedEvent(uuid(), productId));
 
     await Promise.allSettled(events.map((e) => handler.handle(e)));
 
