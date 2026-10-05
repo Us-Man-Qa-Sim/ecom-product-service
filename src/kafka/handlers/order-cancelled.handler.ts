@@ -41,12 +41,26 @@ export class OrderCancelledHandler implements TopicHandler<'order.cancelled'>, O
         );
 
         const reservation = await this.reservationModel
-          .findOne({ orderId, status: 'ACTIVE' })
+          .findOne({ orderId })
           .session(session)
           .exec();
 
         if (!reservation) {
-          this.logger.log({ orderId }, 'No active reservation found, nothing to release');
+          // KFK-7: cancellation arrived before order.created — plant a tombstone
+          // so a late-arriving reservation attempt is blocked by the unique orderId index.
+          await this.reservationModel.create(
+            [{ orderId, items: [], status: 'RELEASED' as const }],
+            { session },
+          );
+          this.logger.warn({ orderId }, 'Cancellation arrived before reservation; tombstone created');
+          return;
+        }
+
+        if (reservation.status !== 'ACTIVE') {
+          this.logger.log(
+            { orderId, status: reservation.status },
+            'Reservation already in terminal state, nothing to release',
+          );
           return;
         }
 

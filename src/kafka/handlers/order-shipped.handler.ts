@@ -41,12 +41,26 @@ export class OrderShippedHandler implements TopicHandler<'order.shipped'>, OnMod
         );
 
         const reservation = await this.reservationModel
-          .findOne({ orderId, status: 'ACTIVE' })
+          .findOne({ orderId })
           .session(session)
           .exec();
 
         if (!reservation) {
-          this.logger.log({ orderId }, 'No active reservation found, nothing to consume');
+          // KFK-7: shipped arrived before order.created (defensive — shouldn't
+          // happen in normal flow, but guards against it if it does).
+          await this.reservationModel.create(
+            [{ orderId, items: [], status: 'CONSUMED' as const }],
+            { session },
+          );
+          this.logger.warn({ orderId }, 'Shipped arrived before reservation; tombstone created');
+          return;
+        }
+
+        if (reservation.status !== 'ACTIVE') {
+          this.logger.log(
+            { orderId, status: reservation.status },
+            'Reservation already in terminal state, nothing to consume',
+          );
           return;
         }
 

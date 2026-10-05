@@ -49,7 +49,23 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
           session,
         });
 
-        // 2. Load every referenced product in one round-trip
+        // 2. KFK-7: a terminal event (cancel/ship) may have arrived first and
+        //    planted a tombstone reservation. If one exists, skip — the order is
+        //    already in a terminal state on the order-service side.
+        const existing = await this.reservationModel
+          .findOne({ orderId })
+          .session(session)
+          .exec();
+
+        if (existing) {
+          this.logger.warn(
+            { orderId, status: existing.status },
+            'Late order.created: reservation already exists, skipping',
+          );
+          return;
+        }
+
+        // 3. Load every referenced product in one round-trip
         const productIds = items.map((i) => new Types.ObjectId(i.productId));
         const products = await this.productModel
           .find({ _id: { $in: productIds } })
@@ -58,7 +74,7 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
 
         const productMap = new Map(products.map((p) => [p._id.toString(), p]));
 
-        // 3. Check availability (all-or-nothing)
+        // 4. Check availability (all-or-nothing)
         const failures: string[] = [];
         for (const item of items) {
           const product = productMap.get(item.productId);
@@ -81,7 +97,7 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
           return;
         }
 
-        // 4. Reserve stock — conditional $gte guard as a safety net on top of
+        // 5. Reserve stock — conditional $gte guard as a safety net on top of
         //    the read-check above (snapshot isolation prevents races, but belt
         //    and suspenders never hurts inside a transaction).
         for (const item of items) {
@@ -107,7 +123,7 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
           }
         }
 
-        // 5. Reservation record
+        // 6. Reservation record
         await this.reservationModel.create(
           [
             {
@@ -122,7 +138,7 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
           { session },
         );
 
-        // 6. Outbox: stock-reserved
+        // 7. Outbox: stock-reserved
         await this.writeOutbox(session, orderId, correlationId, {
           topic: TOPICS.ORDER_STOCK_RESERVED,
           payload: { orderId },
