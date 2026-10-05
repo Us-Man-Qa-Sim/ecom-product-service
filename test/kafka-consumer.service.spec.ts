@@ -33,6 +33,9 @@ function makeConfig(overrides: Record<string, unknown> = {}): ConfigService<Env,
     KAFKA_BROKERS: 'localhost:9092',
     KAFKA_CLIENT_ID: 'product-service',
     KAFKA_CONSUMER_GROUP_ID: 'product-service',
+    KAFKA_CONSUMER_MAX_RETRIES: 3,
+    KAFKA_CONSUMER_RETRY_BASE_MS: 10,
+    KAFKA_CONSUMER_RETRY_MAX_MS: 100,
     ...overrides,
   };
   return { get: (k: string) => values[k] } as unknown as ConfigService<Env, true>;
@@ -195,16 +198,118 @@ describe('KafkaConsumerService', () => {
         { topic: TOPICS.ORDER_CREATED, partition: 0, offset: '43' },
       ]);
     });
+  });
 
-    it('does NOT commit when the handler throws', async () => {
-      handle.mockRejectedValueOnce(new Error('handler failure'));
+  describe('retry with backoff', () => {
+    let handle: jest.Mock;
+
+    beforeEach(async () => {
+      handle = jest.fn();
+      service.subscribe(TOPICS.ORDER_CREATED, { handle });
+      await service.onApplicationBootstrap();
+    });
+
+    it('retries and succeeds on second attempt', async () => {
+      handle
+        .mockRejectedValueOnce(new Error('transient failure'))
+        .mockResolvedValueOnce(undefined);
+
       const envelope = validEnvelope(TOPICS.ORDER_CREATED);
       const msg = kafkaMessage(JSON.stringify(envelope));
 
-      await expect(capturedEachMessage!(msg)).rejects.toThrow('handler failure');
+      await capturedEachMessage!(msg);
 
-      expect(handle).toHaveBeenCalledTimes(1);
-      expect(commitOffsets).not.toHaveBeenCalled();
+      expect(handle).toHaveBeenCalledTimes(2);
+      expect(commitOffsets).toHaveBeenCalledTimes(1);
+      expect(commitOffsets).toHaveBeenCalledWith([
+        { topic: TOPICS.ORDER_CREATED, partition: 0, offset: '43' },
+      ]);
+    });
+
+    it('retries and succeeds on the last attempt', async () => {
+      handle
+        .mockRejectedValueOnce(new Error('fail 1'))
+        .mockRejectedValueOnce(new Error('fail 2'))
+        .mockResolvedValueOnce(undefined);
+
+      const envelope = validEnvelope(TOPICS.ORDER_CREATED);
+      const msg = kafkaMessage(JSON.stringify(envelope));
+
+      await capturedEachMessage!(msg);
+
+      expect(handle).toHaveBeenCalledTimes(3);
+      expect(commitOffsets).toHaveBeenCalledTimes(1);
+    });
+
+    it('commits as poison message after exhausting all retries', async () => {
+      handle.mockRejectedValue(new Error('persistent failure'));
+
+      const envelope = validEnvelope(TOPICS.ORDER_CREATED);
+      const msg = kafkaMessage(JSON.stringify(envelope));
+
+      await capturedEachMessage!(msg);
+
+      expect(handle).toHaveBeenCalledTimes(3);
+      expect(commitOffsets).toHaveBeenCalledTimes(1);
+      expect(commitOffsets).toHaveBeenCalledWith([
+        { topic: TOPICS.ORDER_CREATED, partition: 0, offset: '43' },
+      ]);
+    });
+
+    it('applies backoff delay between retries', async () => {
+      handle
+        .mockRejectedValueOnce(new Error('fail'))
+        .mockResolvedValueOnce(undefined);
+
+      const sleepSpy = jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+      const envelope = validEnvelope(TOPICS.ORDER_CREATED);
+      const msg = kafkaMessage(JSON.stringify(envelope));
+
+      await capturedEachMessage!(msg);
+
+      expect(sleepSpy).toHaveBeenCalledTimes(1);
+      const delay = sleepSpy.mock.calls[0][0] as number;
+      expect(delay).toBeGreaterThanOrEqual(10);
+      expect(delay).toBeLessThanOrEqual(12);
+
+      sleepSpy.mockRestore();
+    });
+
+    it('does not apply backoff delay on the final failed attempt', async () => {
+      handle.mockRejectedValue(new Error('always fails'));
+
+      const sleepSpy = jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+      const envelope = validEnvelope(TOPICS.ORDER_CREATED);
+      const msg = kafkaMessage(JSON.stringify(envelope));
+
+      await capturedEachMessage!(msg);
+
+      expect(sleepSpy).toHaveBeenCalledTimes(2);
+      expect(handle).toHaveBeenCalledTimes(3);
+
+      sleepSpy.mockRestore();
+    });
+
+    it('caps backoff delay at retryMaxMs', async () => {
+      const svc = new KafkaConsumerService(
+        makeConfig({ KAFKA_CONSUMER_RETRY_BASE_MS: 1000, KAFKA_CONSUMER_RETRY_MAX_MS: 50 }),
+      );
+      const h = jest.fn()
+        .mockRejectedValueOnce(new Error('fail'))
+        .mockResolvedValueOnce(undefined);
+      svc.subscribe(TOPICS.ORDER_CREATED, { handle: h });
+      await svc.onApplicationBootstrap();
+
+      const sleepSpy = jest.spyOn(svc as any, 'sleep').mockResolvedValue(undefined);
+      const envelope = validEnvelope(TOPICS.ORDER_CREATED);
+      const msg = kafkaMessage(JSON.stringify(envelope));
+
+      await capturedEachMessage!(msg);
+
+      const delay = sleepSpy.mock.calls[0][0] as number;
+      expect(delay).toBeLessThanOrEqual(60);
+
+      sleepSpy.mockRestore();
     });
   });
 
