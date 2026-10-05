@@ -4,6 +4,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
+import { KafkaModule } from './kafka/kafka.module';
 import { ProductModule } from './product/product.module';
 
 @Module({
@@ -26,6 +27,7 @@ import { ProductModule } from './product/product.module';
       }),
     }),
     DatabaseModule,
+    KafkaModule,
     HealthModule,
     ProductModule,
   ],

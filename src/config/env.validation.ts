@@ -32,6 +32,15 @@ export const envSchema = z.object({
   // passes before that wiring lands.
   KAFKA_BROKERS: z.string().default('localhost:9092'),
   KAFKA_CLIENT_ID: z.string().default('product-service'),
+  KAFKA_CONSUMER_GROUP_ID: z.string().default('product-service'),
+
+  OUTBOX_RELAY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  OUTBOX_RELAY_POLL_INTERVAL_MS: numericString(250),
+  OUTBOX_RELAY_BATCH_SIZE: numericString(32),
+  OUTBOX_RELAY_ERROR_BACKOFF_MS: numericString(5_000),
 });
 
 export type Env = z.infer<typeof envSchema>;
