@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Env } from '../src/config/env.validation';
 import { KafkaConsumerService } from '../src/kafka/kafka-consumer.service';
 import type { TopicHandler } from '../src/kafka/consumer';
-import { TOPICS, type TopicName } from '@us-man-qa-sim/ecom-contracts/events';
+import { TOPICS } from '@us-man-qa-sim/ecom-contracts/events';
 
 const commitOffsets = jest.fn();
 const consumerDisconnect = jest.fn();
@@ -28,9 +28,7 @@ jest.mock('@confluentinc/kafka-javascript', () => ({
   },
 }));
 
-function makeConfig(
-  overrides: Record<string, unknown> = {},
-): ConfigService<Env, true> {
+function makeConfig(overrides: Record<string, unknown> = {}): ConfigService<Env, true> {
   const values: Record<string, unknown> = {
     KAFKA_BROKERS: 'localhost:9092',
     KAFKA_CLIENT_ID: 'product-service',
@@ -49,7 +47,10 @@ function validEnvelope(topic: string) {
     correlationId: randomUUID(),
   };
   if (topic === TOPICS.ORDER_CREATED) {
-    return { ...base, payload: { orderId: randomUUID(), items: [{ productId: 'p1', quantity: 2 }] } };
+    return {
+      ...base,
+      payload: { orderId: randomUUID(), items: [{ productId: 'p1', quantity: 2 }] },
+    };
   }
   if (topic === TOPICS.ORDER_CANCELLED) {
     return { ...base, payload: { orderId: randomUUID(), userId: randomUUID() } };
@@ -115,7 +116,6 @@ describe('KafkaConsumerService', () => {
       expect(consumerConnect).toHaveBeenCalledTimes(1);
       expect(consumerSubscribe).toHaveBeenCalledWith({
         topics: [TOPICS.ORDER_CREATED, TOPICS.ORDER_CANCELLED],
-        fromBeginning: false,
       });
       expect(consumerRun).toHaveBeenCalledWith({
         eachMessage: expect.any(Function),

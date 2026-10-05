@@ -5,6 +5,7 @@ import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
 import { KafkaModule } from './kafka/kafka.module';
+import { OutboxModule } from './outbox/outbox.module';
 import { ProductModule } from './product/product.module';
 
 @Module({
@@ -29,6 +30,7 @@ import { ProductModule } from './product/product.module';
     DatabaseModule,
     KafkaModule,
     HealthModule,
+    OutboxModule,
     ProductModule,
   ],
 })

@@ -42,7 +42,7 @@ export class KafkaConsumerService implements OnApplicationBootstrap, OnApplicati
     await this.consumer.connect();
 
     const topics = [...this.handlers.keys()];
-    await this.consumer.subscribe({ topics, fromBeginning: false });
+    await this.consumer.subscribe({ topics });
 
     await this.consumer.run({
       eachMessage: async ({ topic, partition, message }) => {
@@ -75,7 +75,10 @@ export class KafkaConsumerService implements OnApplicationBootstrap, OnApplicati
 
     const raw = message.value?.toString();
     if (!raw) {
-      this.logger.warn({ topic, partition, offset: message.offset }, 'Empty message value, skipping');
+      this.logger.warn(
+        { topic, partition, offset: message.offset },
+        'Empty message value, skipping',
+      );
       await this.commit(topic, partition, message.offset);
       return;
     }
@@ -111,8 +114,6 @@ export class KafkaConsumerService implements OnApplicationBootstrap, OnApplicati
   }
 
   private async commit(topic: string, partition: number, offset: string): Promise<void> {
-    await this.consumer!.commitOffsets([
-      { topic, partition, offset: String(Number(offset) + 1) },
-    ]);
+    await this.consumer!.commitOffsets([{ topic, partition, offset: String(Number(offset) + 1) }]);
   }
 }

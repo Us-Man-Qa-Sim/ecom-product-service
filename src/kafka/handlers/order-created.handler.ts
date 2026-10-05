@@ -45,10 +45,9 @@ export class OrderCreatedHandler implements TopicHandler<'order.created'>, OnMod
     try {
       await this.connection.transaction(async (session) => {
         // 1. Inbox: duplicate eventId → unique-index error → caught below
-        await this.processedEventModel.create(
-          [{ eventId, eventType: TOPICS.ORDER_CREATED }],
-          { session },
-        );
+        await this.processedEventModel.create([{ eventId, eventType: TOPICS.ORDER_CREATED }], {
+          session,
+        });
 
         // 2. Load every referenced product in one round-trip
         const productIds = items.map((i) => new Types.ObjectId(i.productId));
