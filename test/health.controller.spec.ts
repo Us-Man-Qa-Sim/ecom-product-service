@@ -5,6 +5,7 @@ import type {
   MongooseHealthIndicator,
 } from '@nestjs/terminus';
 import type { Connection } from 'mongoose';
+import { hostname } from 'node:os';
 import { HealthController } from '../src/health/health.controller';
 
 // The controller delegates to Terminus and pings the injected Mongoose
@@ -76,6 +77,6 @@ describe('HealthController', () => {
       {} as MongooseHealthIndicator,
       {} as Connection,
     );
-    expect(controller.live()).toEqual({ status: 'ok' });
+    expect(controller.live()).toEqual({ status: 'ok', instanceId: hostname() });
   });
 });
