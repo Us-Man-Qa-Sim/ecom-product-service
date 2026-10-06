@@ -13,25 +13,27 @@ import {
   ValidationError,
 } from '../src/common/errors/domain-errors';
 
-async function caught(filter: GrpcExceptionFilter, err: unknown): Promise<RpcException> {
+// The filter emits the gRPC wire payload (`{ code, message }`), which Nest
+// passes to the grpc-js callback as-is.
+type GrpcError = { code: number; message: string };
+
+async function caught(filter: GrpcExceptionFilter, err: unknown): Promise<GrpcError> {
   const observable = filter.catch(err, {} as never);
   try {
     await firstValueFrom(observable);
     throw new Error('expected throw');
   } catch (thrown) {
-    if (thrown instanceof RpcException) return thrown;
-    throw thrown;
+    if (thrown instanceof Error) throw thrown;
+    return thrown as GrpcError;
   }
 }
 
-function code(ex: RpcException): number {
-  const err = ex.getError();
-  return (err as { code: number }).code;
+function code(ex: GrpcError): number {
+  return ex.code;
 }
 
-function message(ex: RpcException): string {
-  const err = ex.getError();
-  return (err as { message: string }).message;
+function message(ex: GrpcError): string {
+  return ex.message;
 }
 
 describe('GrpcExceptionFilter', () => {
@@ -52,7 +54,7 @@ describe('GrpcExceptionFilter', () => {
   it('passes RpcException through unchanged', async () => {
     const original = new RpcException({ code: GrpcStatus.ABORTED, message: 'from inside' });
     const mapped = await caught(filter, original);
-    expect(mapped).toBe(original);
+    expect(mapped).toBe(original.getError());
   });
 
   it.each([
