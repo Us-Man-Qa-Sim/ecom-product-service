@@ -2,6 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { HealthCheck, HealthCheckService, MongooseHealthIndicator } from '@nestjs/terminus';
 import type { Connection } from 'mongoose';
+import { hostname } from 'node:os';
 
 @Controller('health')
 export class HealthController {
@@ -23,6 +24,6 @@ export class HealthController {
 
   @Get('live')
   live() {
-    return { status: 'ok' as const };
+    return { status: 'ok' as const, instanceId: hostname() };
   }
 }
