@@ -37,7 +37,7 @@
     "@us-man-qa-sim/ecom-contracts": "0.1.0",
     "class-transformer": "0.5.1",
     "class-validator": "0.15.1",
-    "mongoose": "9.10.4",
+    "mongoose": "9.11.0",
     "nestjs-pino": "5.3.1",
     "pino": "10.4.0",
     "pino-http": "11.0.0",
